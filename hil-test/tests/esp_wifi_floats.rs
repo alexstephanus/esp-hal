@@ -1,7 +1,7 @@
 //! Cp0Disable exception regression test
 
 //% CHIPS: esp32 esp32s2 esp32s3
-//% FEATURES: unstable esp-wifi esp-alloc
+//% FEATURES: unstable esp-wifi esp-alloc esp-wifi/wifi
 
 #![no_std]
 #![no_main]
@@ -19,6 +19,8 @@ use esp_hal::{
     timer::timg::TimerGroup,
 };
 use hil_test as _;
+
+esp_bootloader_esp_idf::esp_app_desc!();
 
 #[inline(never)]
 fn run_float_calc(x: f32) -> f32 {
@@ -42,11 +44,10 @@ cfg_if::cfg_if! {
     if #[cfg(multi_core)] {
         use core::sync::atomic::{AtomicBool, Ordering};
 
-        use esp_hal::cpu_control::CpuControl;
+        use esp_hal::system::{CpuControl, Stack};
 
         static DONE: AtomicBool = AtomicBool::new(false);
-        static mut APP_CORE_STACK: esp_hal::cpu_control::Stack<8192> =
-            esp_hal::cpu_control::Stack::new();
+        static mut APP_CORE_STACK: Stack<8192> = Stack::new();
     }
 }
 
@@ -57,7 +58,7 @@ mod tests {
 
     #[init]
     fn test_init() -> Peripherals {
-        esp_alloc::heap_allocator!(72 * 1024);
+        esp_alloc::heap_allocator!(size: 72 * 1024);
 
         let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
         esp_hal::init(config)
@@ -130,6 +131,19 @@ mod tests {
             .start_app_core(
                 unsafe { &mut *core::ptr::addr_of_mut!(APP_CORE_STACK) },
                 move || {
+                    // app core starts with interrupts disabled
+                    unsafe {
+                        esp_hal::xtensa_lx::interrupt::enable_mask(
+                            esp_hal::xtensa_lx_rt::interrupt::CpuInterruptLevel::Level1.mask()
+                                | esp_hal::xtensa_lx_rt::interrupt::CpuInterruptLevel::Level2
+                                    .mask()
+                                | esp_hal::xtensa_lx_rt::interrupt::CpuInterruptLevel::Level3
+                                    .mask()
+                                | esp_hal::xtensa_lx_rt::interrupt::CpuInterruptLevel::Level6
+                                    .mask(),
+                        );
+                    }
+
                     let timg0 = TimerGroup::new(peripherals.TIMG0);
                     let _init = esp_wifi::init(
                         timg0.timer1,
@@ -174,9 +188,9 @@ mod tests {
 // anything.
 #[allow(unused)] // compile test
 fn esp_wifi_can_be_initialized_with_any_timer(
-    timer: esp_hal::timer::AnyTimer,
+    timer: esp_hal::timer::AnyTimer<'static>,
     rng: esp_hal::rng::Rng,
-    radio_clocks: esp_hal::peripherals::RADIO_CLK,
+    radio_clocks: esp_hal::peripherals::RADIO_CLK<'static>,
 ) {
     esp_wifi::init(timer, rng, radio_clocks);
 }

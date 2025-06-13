@@ -36,24 +36,21 @@
     not(any(esp32, esp32s2)),
     doc = "let dma_channel = peripherals.DMA_CH0;"
 )]
-//! let (mut rx_buffer, rx_descriptors, _, tx_descriptors) =
-//! dma_buffers!(0, 4 * 4092);
+//! let (mut rx_buffer, rx_descriptors, _, _) = dma_buffers!(4 * 4092, 0);
 //!
 //! let i2s = I2s::new(
 //!     peripherals.I2S0,
 //!     Standard::Philips,
 //!     DataFormat::Data16Channel16,
-//!     44100.Hz(),
+//!     Rate::from_hz(44100),
 //!     dma_channel,
-//!     rx_descriptors,
-//!     tx_descriptors,
 //! );
 #![cfg_attr(not(esp32), doc = "let i2s = i2s.with_mclk(peripherals.GPIO0);")]
 //! let mut i2s_rx = i2s.i2s_rx
 //!     .with_bclk(peripherals.GPIO1)
 //!     .with_ws(peripherals.GPIO2)
 //!     .with_din(peripherals.GPIO5)
-//!     .build();
+//!     .build(rx_descriptors);
 //!
 //! let mut transfer = i2s_rx.read_dma_circular(&mut rx_buffer)?;
 //!
@@ -76,14 +73,15 @@ use enumset::{EnumSet, EnumSetType};
 use private::*;
 
 use crate::{
+    Async,
+    Blocking,
+    DriverMode,
     dma::{
-        dma_private::{DmaSupport, DmaSupportRx, DmaSupportTx},
         Channel,
         ChannelRx,
         ChannelTx,
         DescriptorChain,
         DmaChannelFor,
-        DmaDescriptor,
         DmaEligible,
         DmaError,
         DmaTransferRx,
@@ -93,17 +91,14 @@ use crate::{
         PeripheralRxChannel,
         PeripheralTxChannel,
         ReadBuffer,
-        Rx,
-        Tx,
         WriteBuffer,
+        dma_private::{DmaSupport, DmaSupportRx, DmaSupportTx},
     },
-    gpio::interconnect::PeripheralOutput,
+    gpio::{OutputConfig, interconnect::PeripheralOutput},
+    i2s::AnyI2s,
     interrupt::{InterruptConfigurable, InterruptHandler},
-    peripheral::{Peripheral, PeripheralRef},
     system::PeripheralGuard,
-    Async,
-    Blocking,
-    DriverMode,
+    time::Rate,
 };
 
 #[derive(Debug, EnumSetType)]
@@ -328,22 +323,17 @@ impl<'d> I2s<'d, Blocking> {
     /// Construct a new I2S peripheral driver instance for the first I2S
     /// peripheral
     #[allow(clippy::too_many_arguments)]
-    pub fn new<CH>(
-        i2s: impl Peripheral<P = impl RegisterAccess> + 'd,
+    pub fn new(
+        i2s: impl Instance + 'd,
         standard: Standard,
         data_format: DataFormat,
-        sample_rate: impl Into<fugit::HertzU32>,
-        channel: impl Peripheral<P = CH> + 'd,
-        rx_descriptors: &'static mut [DmaDescriptor],
-        tx_descriptors: &'static mut [DmaDescriptor],
-    ) -> Self
-    where
-        CH: DmaChannelFor<AnyI2s>,
-    {
-        crate::into_ref!(i2s);
-
-        let channel = Channel::new(channel.map(|ch| ch.degrade()));
+        sample_rate: Rate,
+        channel: impl DmaChannelFor<AnyI2s<'d>>,
+    ) -> Self {
+        let channel = Channel::new(channel.degrade());
         channel.runtime_ensure_compatible(&i2s);
+
+        let i2s = i2s.degrade();
 
         // on ESP32-C3 / ESP32-S3 and later RX and TX are independent and
         // could be configured totally independently but for now handle all
@@ -359,19 +349,15 @@ impl<'d> I2s<'d, Blocking> {
         i2s.set_master();
         i2s.update();
 
-        let i2s = i2s.map_into();
-
         Self {
             i2s_rx: RxCreator {
                 i2s: unsafe { i2s.clone_unchecked() },
                 rx_channel: channel.rx,
-                descriptors: rx_descriptors,
                 guard: rx_guard,
             },
             i2s_tx: TxCreator {
                 i2s,
                 tx_channel: channel.tx,
-                descriptors: tx_descriptors,
                 guard: tx_guard,
             },
         }
@@ -383,13 +369,11 @@ impl<'d> I2s<'d, Blocking> {
             i2s_rx: RxCreator {
                 i2s: self.i2s_rx.i2s,
                 rx_channel: self.i2s_rx.rx_channel.into_async(),
-                descriptors: self.i2s_rx.descriptors,
                 guard: self.i2s_rx.guard,
             },
             i2s_tx: TxCreator {
                 i2s: self.i2s_tx.i2s,
                 tx_channel: self.i2s_tx.tx_channel.into_async(),
-                descriptors: self.i2s_tx.descriptors,
                 guard: self.i2s_tx.guard,
             },
         }
@@ -401,10 +385,13 @@ where
     Dm: DriverMode,
 {
     /// Configures the I2S peripheral to use a master clock (MCLK) output pin.
-    pub fn with_mclk<P: PeripheralOutput>(self, pin: impl Peripheral<P = P> + 'd) -> Self {
-        crate::into_mapped_ref!(pin);
-        pin.set_to_push_pull_output();
-        self.i2s_tx.i2s.mclk_signal().connect_to(pin);
+    pub fn with_mclk(self, mclk: impl PeripheralOutput<'d>) -> Self {
+        let mclk = mclk.into();
+
+        mclk.apply_output_config(&OutputConfig::default());
+        mclk.set_output_enable(true);
+
+        self.i2s_tx.i2s.mclk_signal().connect_to(&mclk);
 
         self
     }
@@ -415,8 +402,8 @@ pub struct I2sTx<'d, Dm>
 where
     Dm: DriverMode,
 {
-    i2s: PeripheralRef<'d, AnyI2s>,
-    tx_channel: ChannelTx<'d, Dm, PeripheralTxChannel<AnyI2s>>,
+    i2s: AnyI2s<'d>,
+    tx_channel: ChannelTx<Dm, PeripheralTxChannel<AnyI2s<'d>>>,
     tx_chain: DescriptorChain,
     _guard: PeripheralGuard,
 }
@@ -434,6 +421,8 @@ impl<Dm> DmaSupport for I2sTx<'_, Dm>
 where
     Dm: DriverMode,
 {
+    type DriverMode = Dm;
+
     fn peripheral_wait_dma(&mut self, _is_rx: bool, _is_tx: bool) {
         self.i2s.wait_for_tx_done();
     }
@@ -447,9 +436,9 @@ impl<'d, Dm> DmaSupportTx for I2sTx<'d, Dm>
 where
     Dm: DriverMode,
 {
-    type TX = ChannelTx<'d, Dm, PeripheralTxChannel<AnyI2s>>;
+    type Channel = PeripheralTxChannel<AnyI2s<'d>>;
 
-    fn tx(&mut self) -> &mut Self::TX {
+    fn tx(&mut self) -> &mut ChannelTx<Dm, PeripheralTxChannel<AnyI2s<'d>>> {
         &mut self.tx_channel
     }
 
@@ -462,7 +451,7 @@ impl<Dm> I2sTx<'_, Dm>
 where
     Dm: DriverMode,
 {
-    fn write_bytes(&mut self, data: &[u8]) -> Result<(), Error> {
+    fn write(&mut self, data: &[u8]) -> Result<(), Error> {
         self.start_tx_transfer(&data, false)?;
 
         // wait until I2S_TX_IDLE is 1
@@ -504,8 +493,8 @@ where
     }
 
     /// Writes a slice of data to the I2S peripheral.
-    pub fn write(&mut self, words: &[impl AcceptedWord]) -> Result<(), Error> {
-        self.write_bytes(unsafe {
+    pub fn write_words(&mut self, words: &[impl AcceptedWord]) -> Result<(), Error> {
+        self.write(unsafe {
             core::slice::from_raw_parts(words.as_ptr().cast::<u8>(), core::mem::size_of_val(words))
         })
     }
@@ -543,8 +532,8 @@ pub struct I2sRx<'d, Dm>
 where
     Dm: DriverMode,
 {
-    i2s: PeripheralRef<'d, AnyI2s>,
-    rx_channel: ChannelRx<'d, Dm, PeripheralRxChannel<AnyI2s>>,
+    i2s: AnyI2s<'d>,
+    rx_channel: ChannelRx<Dm, PeripheralRxChannel<AnyI2s<'d>>>,
     rx_chain: DescriptorChain,
     _guard: PeripheralGuard,
 }
@@ -562,6 +551,8 @@ impl<Dm> DmaSupport for I2sRx<'_, Dm>
 where
     Dm: DriverMode,
 {
+    type DriverMode = Dm;
+
     fn peripheral_wait_dma(&mut self, _is_rx: bool, _is_tx: bool) {
         self.i2s.wait_for_rx_done();
     }
@@ -571,13 +562,14 @@ where
     }
 }
 
+#[instability::unstable]
 impl<'d, Dm> DmaSupportRx for I2sRx<'d, Dm>
 where
     Dm: DriverMode,
 {
-    type RX = ChannelRx<'d, Dm, PeripheralRxChannel<AnyI2s>>;
+    type Channel = PeripheralRxChannel<AnyI2s<'d>>;
 
-    fn rx(&mut self) -> &mut Self::RX {
+    fn rx(&mut self) -> &mut ChannelRx<Dm, PeripheralRxChannel<AnyI2s<'d>>> {
         &mut self.rx_channel
     }
 
@@ -590,7 +582,7 @@ impl<Dm> I2sRx<'_, Dm>
 where
     Dm: DriverMode,
 {
-    fn read_bytes(&mut self, mut data: &mut [u8]) -> Result<(), Error> {
+    fn read(&mut self, mut data: &mut [u8]) -> Result<(), Error> {
         self.start_rx_transfer(&mut data, false)?;
 
         // wait until I2S_RX_IDLE is 1
@@ -633,12 +625,12 @@ where
 
     /// Reads a slice of data from the I2S peripheral and stores it in the
     /// provided buffer.
-    pub fn read(&mut self, words: &mut [impl AcceptedWord]) -> Result<(), Error> {
+    pub fn read_words(&mut self, words: &mut [impl AcceptedWord]) -> Result<(), Error> {
         if core::mem::size_of_val(words) > 4096 || words.is_empty() {
             return Err(Error::IllegalArgument);
         }
 
-        self.read_bytes(unsafe {
+        self.read(unsafe {
             core::slice::from_raw_parts_mut(
                 words.as_mut_ptr().cast::<u8>(),
                 core::mem::size_of_val(words),
@@ -675,28 +667,32 @@ where
     }
 }
 
-/// Provides an abstraction for accessing the I2S peripheral registers.
-pub trait RegisterAccess: RegisterAccessPrivate {}
-impl<T> RegisterAccess for T where T: RegisterAccessPrivate {}
+/// A peripheral singleton compatible with the I2S master driver.
+pub trait Instance: RegisterAccessPrivate + super::IntoAnyI2s {}
+impl Instance for crate::peripherals::I2S0<'_> {}
+#[cfg(i2s1)]
+impl Instance for crate::peripherals::I2S1<'_> {}
+impl Instance for AnyI2s<'_> {}
 
 mod private {
     use enumset::EnumSet;
-    use fugit::HertzU32;
 
     use super::*;
     #[cfg(not(i2s1))]
     use crate::pac::i2s0::RegisterBlock;
     use crate::{
+        DriverMode,
         dma::{ChannelRx, ChannelTx, DescriptorChain, DmaDescriptor, DmaEligible},
         gpio::{
-            interconnect::{PeripheralInput, PeripheralOutput},
+            InputConfig,
             InputSignal,
+            OutputConfig,
             OutputSignal,
+            interconnect::{PeripheralInput, PeripheralOutput},
         },
+        i2s::AnyI2sInner,
         interrupt::InterruptHandler,
-        peripheral::{Peripheral, PeripheralRef},
-        peripherals::{Interrupt, I2S0},
-        DriverMode,
+        peripherals::{I2S0, Interrupt},
     };
     // on ESP32-S3 I2S1 doesn't support all features - use that to avoid using those features
     // by accident
@@ -707,9 +703,8 @@ mod private {
     where
         Dm: DriverMode,
     {
-        pub i2s: PeripheralRef<'d, AnyI2s>,
-        pub tx_channel: ChannelTx<'d, Dm, PeripheralTxChannel<AnyI2s>>,
-        pub descriptors: &'static mut [DmaDescriptor],
+        pub i2s: AnyI2s<'d>,
+        pub tx_channel: ChannelTx<Dm, PeripheralTxChannel<AnyI2s<'d>>>,
         pub(crate) guard: PeripheralGuard,
     }
 
@@ -717,45 +712,45 @@ mod private {
     where
         Dm: DriverMode,
     {
-        pub fn build(self) -> I2sTx<'d, Dm> {
+        pub fn build(self, descriptors: &'static mut [DmaDescriptor]) -> I2sTx<'d, Dm> {
             let peripheral = self.i2s.peripheral();
             I2sTx {
                 i2s: self.i2s,
                 tx_channel: self.tx_channel,
-                tx_chain: DescriptorChain::new(self.descriptors),
+                tx_chain: DescriptorChain::new(descriptors),
                 _guard: PeripheralGuard::new(peripheral),
             }
         }
 
-        pub fn with_bclk<P>(self, pin: impl Peripheral<P = P> + 'd) -> Self
-        where
-            P: PeripheralOutput,
-        {
-            crate::into_mapped_ref!(pin);
-            pin.set_to_push_pull_output();
-            self.i2s.bclk_signal().connect_to(pin);
+        pub fn with_bclk(self, bclk: impl PeripheralOutput<'d>) -> Self {
+            let bclk = bclk.into();
+
+            bclk.apply_output_config(&OutputConfig::default());
+            bclk.set_output_enable(true);
+
+            self.i2s.bclk_signal().connect_to(&bclk);
 
             self
         }
 
-        pub fn with_ws<P>(self, pin: impl Peripheral<P = P> + 'd) -> Self
-        where
-            P: PeripheralOutput,
-        {
-            crate::into_mapped_ref!(pin);
-            pin.set_to_push_pull_output();
-            self.i2s.ws_signal().connect_to(pin);
+        pub fn with_ws(self, ws: impl PeripheralOutput<'d>) -> Self {
+            let ws = ws.into();
+
+            ws.apply_output_config(&OutputConfig::default());
+            ws.set_output_enable(true);
+
+            self.i2s.ws_signal().connect_to(&ws);
 
             self
         }
 
-        pub fn with_dout<P>(self, pin: impl Peripheral<P = P> + 'd) -> Self
-        where
-            P: PeripheralOutput,
-        {
-            crate::into_mapped_ref!(pin);
-            pin.set_to_push_pull_output();
-            self.i2s.dout_signal().connect_to(pin);
+        pub fn with_dout(self, dout: impl PeripheralOutput<'d>) -> Self {
+            let dout = dout.into();
+
+            dout.apply_output_config(&OutputConfig::default());
+            dout.set_output_enable(true);
+
+            self.i2s.dout_signal().connect_to(&dout);
 
             self
         }
@@ -765,9 +760,8 @@ mod private {
     where
         Dm: DriverMode,
     {
-        pub i2s: PeripheralRef<'d, AnyI2s>,
-        pub rx_channel: ChannelRx<'d, Dm, PeripheralRxChannel<AnyI2s>>,
-        pub descriptors: &'static mut [DmaDescriptor],
+        pub i2s: AnyI2s<'d>,
+        pub rx_channel: ChannelRx<Dm, PeripheralRxChannel<AnyI2s<'d>>>,
         pub(crate) guard: PeripheralGuard,
     }
 
@@ -775,51 +769,52 @@ mod private {
     where
         Dm: DriverMode,
     {
-        pub fn build(self) -> I2sRx<'d, Dm> {
+        pub fn build(self, descriptors: &'static mut [DmaDescriptor]) -> I2sRx<'d, Dm> {
             let peripheral = self.i2s.peripheral();
             I2sRx {
                 i2s: self.i2s,
                 rx_channel: self.rx_channel,
-                rx_chain: DescriptorChain::new(self.descriptors),
+                rx_chain: DescriptorChain::new(descriptors),
                 _guard: PeripheralGuard::new(peripheral),
             }
         }
 
-        pub fn with_bclk<P>(self, pin: impl Peripheral<P = P> + 'd) -> Self
-        where
-            P: PeripheralOutput,
-        {
-            crate::into_mapped_ref!(pin);
-            pin.set_to_push_pull_output();
-            self.i2s.bclk_rx_signal().connect_to(pin);
+        pub fn with_bclk(self, bclk: impl PeripheralOutput<'d>) -> Self {
+            let bclk = bclk.into();
+
+            bclk.apply_output_config(&OutputConfig::default());
+            bclk.set_output_enable(true);
+
+            self.i2s.bclk_rx_signal().connect_to(&bclk);
 
             self
         }
 
-        pub fn with_ws<P>(self, pin: impl Peripheral<P = P> + 'd) -> Self
-        where
-            P: PeripheralOutput,
-        {
-            crate::into_mapped_ref!(pin);
-            pin.set_to_push_pull_output();
-            self.i2s.ws_rx_signal().connect_to(pin);
+        pub fn with_ws(self, ws: impl PeripheralOutput<'d>) -> Self {
+            let ws = ws.into();
+
+            ws.apply_output_config(&OutputConfig::default());
+            ws.set_output_enable(true);
+
+            self.i2s.ws_rx_signal().connect_to(&ws);
 
             self
         }
 
-        pub fn with_din<P>(self, pin: impl Peripheral<P = P> + 'd) -> Self
-        where
-            P: PeripheralInput,
-        {
-            crate::into_mapped_ref!(pin);
-            pin.init_input(crate::gpio::Pull::None);
-            self.i2s.din_signal().connect_to(pin);
+        pub fn with_din(self, din: impl PeripheralInput<'d>) -> Self {
+            let din = din.into();
+
+            din.apply_input_config(&InputConfig::default());
+            din.set_input_enable(true);
+
+            self.i2s.din_signal().connect_to(&din);
 
             self
         }
     }
 
-    pub trait RegBlock: Peripheral<P = Self> + DmaEligible + Into<super::AnyI2s> + 'static {
+    #[allow(private_bounds)]
+    pub trait RegBlock: DmaEligible {
         fn regs(&self) -> &RegisterBlock;
         fn peripheral(&self) -> crate::system::Peripheral;
     }
@@ -1506,7 +1501,7 @@ mod private {
         }
     }
 
-    impl RegBlock for I2S0 {
+    impl RegBlock for I2S0<'_> {
         fn regs(&self) -> &RegisterBlock {
             unsafe { &*I2S0::PTR.cast::<RegisterBlock>() }
         }
@@ -1516,9 +1511,9 @@ mod private {
         }
     }
 
-    impl RegisterAccessPrivate for I2S0 {
+    impl RegisterAccessPrivate for I2S0<'_> {
         fn set_interrupt_handler(&self, handler: InterruptHandler) {
-            for core in crate::Cpu::other() {
+            for core in crate::system::Cpu::other() {
                 crate::interrupt::disable(core, Interrupt::I2S0);
             }
             unsafe { crate::peripherals::I2S0::steal() }.bind_i2s0_interrupt(handler.handler());
@@ -1529,7 +1524,7 @@ mod private {
         }
     }
 
-    impl Signals for crate::peripherals::I2S0 {
+    impl Signals for crate::peripherals::I2S0<'_> {
         fn mclk_signal(&self) -> OutputSignal {
             cfg_if::cfg_if! {
                 if #[cfg(esp32)] {
@@ -1614,7 +1609,7 @@ mod private {
     }
 
     #[cfg(i2s1)]
-    impl RegBlock for I2S1 {
+    impl RegBlock for I2S1<'_> {
         fn regs(&self) -> &RegisterBlock {
             unsafe { &*I2S1::PTR.cast::<RegisterBlock>() }
         }
@@ -1625,9 +1620,9 @@ mod private {
     }
 
     #[cfg(i2s1)]
-    impl RegisterAccessPrivate for I2S1 {
+    impl RegisterAccessPrivate for I2S1<'_> {
         fn set_interrupt_handler(&self, handler: InterruptHandler) {
-            for core in crate::Cpu::other() {
+            for core in crate::system::Cpu::other() {
                 crate::interrupt::disable(core, Interrupt::I2S1);
             }
             unsafe { crate::peripherals::I2S1::steal() }.bind_i2s1_interrupt(handler.handler());
@@ -1639,7 +1634,7 @@ mod private {
     }
 
     #[cfg(i2s1)]
-    impl Signals for crate::peripherals::I2S1 {
+    impl Signals for crate::peripherals::I2S1<'_> {
         fn mclk_signal(&self) -> OutputSignal {
             cfg_if::cfg_if! {
                 if #[cfg(esp32)] {
@@ -1687,44 +1682,44 @@ mod private {
         }
     }
 
-    impl RegBlock for super::AnyI2s {
+    impl RegBlock for super::AnyI2s<'_> {
         fn regs(&self) -> &RegisterBlock {
             match &self.0 {
-                super::AnyI2sInner::I2s0(i2s) => RegBlock::regs(i2s),
+                AnyI2sInner::I2s0(i2s) => RegBlock::regs(i2s),
                 #[cfg(i2s1)]
-                super::AnyI2sInner::I2s1(i2s) => RegBlock::regs(i2s),
+                AnyI2sInner::I2s1(i2s) => RegBlock::regs(i2s),
             }
         }
 
         delegate::delegate! {
             to match &self.0 {
-                super::AnyI2sInner::I2s0(i2s) => i2s,
+                AnyI2sInner::I2s0(i2s) => i2s,
                 #[cfg(i2s1)]
-                super::AnyI2sInner::I2s1(i2s) => i2s,
+                AnyI2sInner::I2s1(i2s) => i2s,
             } {
                 fn peripheral(&self) -> crate::system::Peripheral;
             }
         }
     }
 
-    impl RegisterAccessPrivate for super::AnyI2s {
+    impl RegisterAccessPrivate for super::AnyI2s<'_> {
         delegate::delegate! {
             to match &self.0 {
-                super::AnyI2sInner::I2s0(i2s) => i2s,
+                AnyI2sInner::I2s0(i2s) => i2s,
                 #[cfg(i2s1)]
-                super::AnyI2sInner::I2s1(i2s) => i2s,
+                AnyI2sInner::I2s1(i2s) => i2s,
             } {
                 fn set_interrupt_handler(&self, handler: InterruptHandler);
             }
         }
     }
 
-    impl Signals for super::AnyI2s {
+    impl Signals for super::AnyI2s<'_> {
         delegate::delegate! {
             to match &self.0 {
-                super::AnyI2sInner::I2s0(i2s) => i2s,
+                AnyI2sInner::I2s0(i2s) => i2s,
                 #[cfg(i2s1)]
-                super::AnyI2sInner::I2s1(i2s) => i2s,
+                AnyI2sInner::I2s1(i2s) => i2s,
             } {
                 fn mclk_signal(&self) -> OutputSignal;
                 fn bclk_signal(&self) -> OutputSignal;
@@ -1744,11 +1739,7 @@ mod private {
         numerator: u32,
     }
 
-    pub fn calculate_clock(
-        sample_rate: impl Into<fugit::HertzU32>,
-        channels: u8,
-        data_bits: u8,
-    ) -> I2sClockDividers {
+    pub fn calculate_clock(sample_rate: Rate, channels: u8, data_bits: u8) -> I2sClockDividers {
         // this loosely corresponds to `i2s_std_calculate_clock` and
         // `i2s_ll_tx_set_mclk` in esp-idf
         //
@@ -1759,8 +1750,7 @@ mod private {
         let mclk_multiple = if data_bits == 24 { 192 } else { 256 };
         let sclk = crate::soc::constants::I2S_SCLK; // for now it's fixed 160MHz and 96MHz (just H2)
 
-        let rate_hz: HertzU32 = sample_rate.into();
-        let rate = rate_hz.raw();
+        let rate = sample_rate.as_hz();
 
         let bclk = rate * channels as u32 * data_bits as u32;
         let mclk = rate * mclk_multiple;
@@ -1817,17 +1807,15 @@ mod private {
 pub mod asynch {
     use super::{Error, I2sRx, I2sTx, RegisterAccessPrivate};
     use crate::{
+        Async,
         dma::{
-            asynch::{DmaRxDoneChFuture, DmaRxFuture, DmaTxDoneChFuture, DmaTxFuture},
             DmaEligible,
             ReadBuffer,
-            Rx,
             RxCircularState,
-            Tx,
             TxCircularState,
             WriteBuffer,
+            asynch::{DmaRxDoneChFuture, DmaRxFuture, DmaTxDoneChFuture, DmaTxFuture},
         },
-        Async,
     };
 
     impl<'d> I2sTx<'d, Async> {
@@ -2030,31 +2018,6 @@ pub mod asynch {
             let avail = self.available().await?;
             let to_rcv = usize::min(avail, data.len());
             Ok(self.state.pop(&mut data[..to_rcv])?)
-        }
-    }
-}
-
-crate::any_peripheral! {
-    /// Any SPI peripheral.
-    pub peripheral AnyI2s {
-        #[cfg(i2s0)]
-        I2s0(crate::peripherals::I2S0),
-        #[cfg(i2s1)]
-        I2s1(crate::peripherals::I2S1),
-    }
-}
-
-impl DmaEligible for AnyI2s {
-    #[cfg(gdma)]
-    type Dma = crate::dma::AnyGdmaChannel;
-    #[cfg(pdma)]
-    type Dma = crate::dma::AnyI2sDmaChannel;
-
-    fn dma_peripheral(&self) -> crate::dma::DmaPeripheral {
-        match &self.0 {
-            AnyI2sInner::I2s0(_) => crate::dma::DmaPeripheral::I2s0,
-            #[cfg(i2s1)]
-            AnyI2sInner::I2s1(_) => crate::dma::DmaPeripheral::I2s1,
         }
     }
 }

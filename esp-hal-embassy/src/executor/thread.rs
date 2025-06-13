@@ -5,7 +5,7 @@ use core::marker::PhantomData;
 use embassy_executor::Spawner;
 #[cfg(all(low_power_wait, multi_core))]
 use esp_hal::interrupt::software::SoftwareInterrupt;
-use esp_hal::{interrupt::Priority, Cpu};
+use esp_hal::{interrupt::Priority, system::Cpu};
 #[cfg(low_power_wait)]
 use portable_atomic::{AtomicBool, Ordering};
 
@@ -55,7 +55,7 @@ pub struct Executor {
 impl Executor {
     /// Create a new Executor.
     #[cfg_attr(
-        multi_core,
+        all(multi_core, low_power_wait),
         doc = r#"
 
 This will use software-interrupt 3 which isn't available for anything else to wake the other core(s)."#
@@ -63,6 +63,9 @@ This will use software-interrupt 3 which isn't available for anything else to wa
     pub fn new() -> Self {
         Self {
             inner: InnerExecutor::new(
+                // Priority 1 means the timer queue can be accessed at interrupt priority 1 - for
+                // the thread mode executor it needs to be one higher than the base run level, to
+                // allow alarm interrupts to be handled.
                 Priority::Priority1,
                 (THREAD_MODE_CONTEXT + Cpu::current() as usize) as *mut (),
             ),
@@ -91,6 +94,7 @@ This will use software-interrupt 3 which isn't available for anything else to wa
     ///
     /// This function never returns.
     pub fn run(&'static mut self, init: impl FnOnce(Spawner)) -> ! {
+        #[cfg(all(multi_core, low_power_wait))]
         unwrap!(esp_hal::interrupt::enable(
             esp_hal::peripherals::Interrupt::FROM_CPU_INTR3,
             Priority::min(),
@@ -112,11 +116,15 @@ This will use software-interrupt 3 which isn't available for anything else to wa
     }
 
     #[cfg(all(xtensa, low_power_wait))]
+    // This function must be in RAM. Loading parts of it from flash can cause a race
+    // that results in the core not waking up. Placing `wait_impl` in RAM ensures that
+    // it is shorter than the interrupt handler that would clear the interrupt source.
+    #[macros::ram]
     fn wait_impl(cpu: usize) {
         // Manual critical section implementation that only masks interrupts handlers.
         // We must not acquire the cross-core on dual-core systems because that would
         // prevent the other core from doing useful work while this core is sleeping.
-        let token: critical_section::RawRestoreState;
+        let token: u32;
         unsafe { core::arch::asm!("rsil {0}, 5", out(reg) token) };
 
         // we do not care about race conditions between the load and store operations,

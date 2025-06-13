@@ -24,19 +24,21 @@
 
 use esp_backtrace as _;
 use esp_hal::{
+    Blocking,
     delay::Delay,
     dma::DmaTxBuf,
     dma_tx_buffer,
     gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull},
     lcd_cam::{
-        lcd::i8080::{Config, TxEightBits, I8080},
         LcdCam,
+        lcd::i8080::{Config, I8080, TxEightBits},
     },
     main,
-    time::RateExtU32,
-    Blocking,
+    time::Rate,
 };
 use esp_println::println;
+
+esp_bootloader_esp_idf::esp_app_desc!();
 
 #[main]
 fn main() -> ! {
@@ -73,7 +75,7 @@ fn main() -> ! {
         lcd_cam.lcd,
         peripherals.DMA_CH0,
         tx_pins,
-        Config::default().with_frequency(20.MHz()),
+        Config::default().with_frequency(Rate::from_mhz(20)),
     )
     .unwrap()
     .with_ctrl_pins(lcd_rs, lcd_wr);
@@ -161,9 +163,9 @@ fn main() -> ! {
             ],
         );
         bus.send(CMD_PWCTR2, &[0x06]); // Power control2   //VAP(GVDD)=3.85+( vcom+vcom offset), VAN(GVCL)=-3.85+(
-                                       // vcom+vcom offset)
+        // vcom+vcom offset)
         bus.send(CMD_PWCTR3, &[0xA7]); // Power control 3  //Source driving current level=low, Gamma driving current
-                                       // level=High
+        // level=High
         bus.send(CMD_VMCTR, &[0x18]); // VCOM Control    //VCOM=0.9
         delay.delay_micros(120_000);
         bus.send(
@@ -181,7 +183,7 @@ fn main() -> ! {
         delay.delay_micros(120_000);
         bus.send(CMD_CSCON, &[0x3C]); // Command Set control // Disable extension command 2 partI
         bus.send(CMD_CSCON, &[0x69]); // Command Set control // Disable
-                                      // extension command 2 partII
+        // extension command 2 partII
 
         bus.send(0x11, &[]); // ExitSleepMode
         delay.delay_micros(130_000);

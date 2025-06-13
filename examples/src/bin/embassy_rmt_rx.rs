@@ -15,10 +15,12 @@ use esp_backtrace as _;
 use esp_hal::{
     gpio::{Level, Output, OutputConfig},
     rmt::{PulseCode, Rmt, RxChannelAsync, RxChannelConfig, RxChannelCreatorAsync},
-    time::RateExtU32,
+    time::Rate,
     timer::timg::TimerGroup,
 };
 use esp_println::{print, println};
+
+esp_bootloader_esp_idf::esp_app_desc!();
 
 const WIDTH: usize = 80;
 
@@ -46,9 +48,9 @@ async fn main(spawner: Spawner) {
 
     cfg_if::cfg_if! {
         if #[cfg(feature = "esp32h2")] {
-            let freq = 32.MHz();
+            let freq = Rate::from_mhz(32);
         } else {
-            let freq = 80.MHz();
+            let freq = Rate::from_mhz(80);
         }
     };
 

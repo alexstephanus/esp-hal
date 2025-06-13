@@ -10,6 +10,7 @@
 
 pub(crate) use esp32h2 as pac;
 // We need to export this for users to use
+#[doc(hidden)]
 pub use pac::Interrupt;
 
 // Note that certain are marked with `virtual` in the invocation of the
@@ -39,6 +40,7 @@ crate::peripherals! {
         HMAC <= HMAC,
         HP_APM <= HP_APM,
         HP_SYS <= HP_SYS,
+        I2C_ANA_MST <= I2C_ANA_MST,
         I2S0 <= I2S0 (I2S0),
         IEEE802154 <= IEEE802154,
         INTERRUPT_CORE0 <= INTERRUPT_CORE0,
@@ -49,6 +51,7 @@ crate::peripherals! {
         LP_ANA <= LP_ANA,
         LP_AON <= LP_AON,
         LP_APM <= LP_APM,
+        LP_APM0 <= LP_APM0,
         LP_PERI <= LP_PERI,
         LP_TIMER <= LP_TIMER,
         LP_WDT <= LP_WDT,
@@ -90,6 +93,10 @@ crate::peripherals! {
         MEM2MEM13 <= virtual,
         MEM2MEM14 <= virtual,
         MEM2MEM15 <= virtual,
+
+        DMA_CH0 <= virtual,
+        DMA_CH1 <= virtual,
+        DMA_CH2 <= virtual,
     ],
     pins: [
         (0, [Input, Output, Analog] (2 => FSPIQ) (2 => FSPIQ))
@@ -120,10 +127,5 @@ crate::peripherals! {
         (25, [Input, Output] () (2 => FSPICS3))
         (26, [Input, Output] () (2 => FSPICS4))
         (27, [Input, Output] () (2 => FSPICS5))
-    ],
-    dma_channels: [
-        DMA_CH0: DmaChannel0,
-        DMA_CH1: DmaChannel1,
-        DMA_CH2: DmaChannel2,
     ]
 }

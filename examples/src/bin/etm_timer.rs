@@ -13,19 +13,21 @@ use esp_backtrace as _;
 use esp_hal::{
     etm::Etm,
     gpio::{
-        etm::{Channels, OutputConfig as EtmOutputConfig},
         Level,
         Output,
         OutputConfig,
         Pull,
+        etm::{Channels, OutputConfig as EtmOutputConfig},
     },
     main,
-    time::ExtU64,
+    time::Duration,
     timer::{
-        systimer::{etm::Event, SystemTimer},
         PeriodicTimer,
+        systimer::{SystemTimer, etm::Event},
     },
 };
+
+esp_bootloader_esp_idf::esp_app_desc!();
 
 #[main]
 fn main() -> ! {
@@ -58,7 +60,7 @@ fn main() -> ! {
     let _configured_channel = channel0.setup(&timer_event, &led_task);
 
     let mut timer = PeriodicTimer::new(alarm);
-    timer.start(1u64.secs()).unwrap();
+    timer.start(Duration::from_secs(1)).unwrap();
 
     // the LED is controlled by the button without involving the CPU
     loop {}

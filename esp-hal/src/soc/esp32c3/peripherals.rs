@@ -10,6 +10,7 @@
 
 pub(crate) use esp32c3 as pac;
 // We need to export this for users to use
+#[doc(hidden)]
 pub use pac::Interrupt;
 
 // Note that certain are marked with `virtual` in the invocation of the
@@ -41,6 +42,7 @@ crate::peripherals! {
         GPIO <= GPIO,
         GPIO_SD <= GPIO_SD,
         HMAC <= HMAC,
+        I2C_ANA_MST <= I2C_ANA_MST,
         I2S0 <= I2S0 (I2S0),
         INTERRUPT_CORE0 <= INTERRUPT_CORE0,
         IO_MUX <= IO_MUX,
@@ -67,6 +69,10 @@ crate::peripherals! {
         USB_DEVICE <= USB_DEVICE,
         WIFI <= virtual,
         XTS_AES <= XTS_AES,
+
+        DMA_CH0 <= virtual,
+        DMA_CH1 <= virtual,
+        DMA_CH2 <= virtual,
     ],
     pins: [
         (0, [Input, Output, Analog, RtcIo])
@@ -91,10 +97,5 @@ crate::peripherals! {
         (19, [Input, Output])
         (20, [Input, Output] (0 => U0RXD) ())
         (21, [Input, Output] () (0 => U0TXD))
-    ],
-    dma_channels: [
-        DMA_CH0: DmaChannel0,
-        DMA_CH1: DmaChannel1,
-        DMA_CH2: DmaChannel2,
     ]
 }

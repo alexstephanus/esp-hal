@@ -21,9 +21,11 @@ use embassy_time::{Duration, Timer};
 use esp_backtrace as _;
 use esp_hal::{
     i2c::master::{Config, I2c},
-    time::RateExtU32,
+    time::Rate,
     timer::timg::TimerGroup,
 };
+
+esp_bootloader_esp_idf::esp_app_desc!();
 
 #[esp_hal_embassy::main]
 async fn main(_spawner: Spawner) {
@@ -34,7 +36,7 @@ async fn main(_spawner: Spawner) {
 
     let mut i2c = I2c::new(
         peripherals.I2C0,
-        Config::default().with_frequency(400.kHz()),
+        Config::default().with_frequency(Rate::from_khz(400)),
     )
     .unwrap()
     .with_sda(peripherals.GPIO4)

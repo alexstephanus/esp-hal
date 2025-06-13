@@ -18,16 +18,17 @@ use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, signal::Signal}
 use embassy_time::{Duration, Ticker};
 use esp_backtrace as _;
 use esp_hal::{
-    cpu_control::{CpuControl, Stack},
     gpio::{Level, Output, OutputConfig},
-    interrupt::{software::SoftwareInterruptControl, Priority},
+    interrupt::{Priority, software::SoftwareInterruptControl},
     main,
-    timer::{timg::TimerGroup, AnyTimer},
-    Cpu,
+    system::{Cpu, CpuControl, Stack},
+    timer::{AnyTimer, timg::TimerGroup},
 };
 use esp_hal_embassy::InterruptExecutor;
 use esp_println::println;
 use static_cell::StaticCell;
+
+esp_bootloader_esp_idf::esp_app_desc!();
 
 static mut APP_CORE_STACK: Stack<8192> = Stack::new();
 

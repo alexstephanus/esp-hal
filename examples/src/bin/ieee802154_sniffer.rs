@@ -11,11 +11,13 @@
 use esp_backtrace as _;
 use esp_hal::{
     main,
-    reset::software_reset,
+    system::software_reset,
     uart::{self, Uart},
 };
 use esp_ieee802154::{Config, Ieee802154};
 use esp_println::println;
+
+esp_bootloader_esp_idf::esp_app_desc!();
 
 #[main]
 fn main() -> ! {
@@ -40,7 +42,7 @@ fn main() -> ! {
     let mut read = [0u8; 2];
     loop {
         let mut buf = [0u8; 1];
-        _ = uart0.read_bytes(&mut buf);
+        _ = uart0.read(&mut buf);
 
         if buf[0] == b'r' {
             continue;
@@ -77,7 +79,7 @@ fn main() -> ! {
         }
 
         let mut buf = [0u8; 1];
-        if let Ok(_) = uart0.read_buffered_bytes(&mut buf) {
+        if let Ok(_) = uart0.read_buffered(&mut buf) {
             if buf[0] == b'r' {
                 software_reset();
             }

@@ -1,12 +1,7 @@
-use core::{cell::RefCell, ptr::addr_of};
+use core::cell::RefCell;
 
 use critical_section::Mutex;
-use esp_hal::{
-    handler,
-    interrupt::Priority,
-    peripherals::RADIO_CLK,
-    system::{RadioClockController, RadioPeripherals},
-};
+use esp_hal::{clock::RadioClockController, handler, interrupt::Priority, peripherals::RADIO_CLK};
 use esp_wifi_sys::include::{
     esp_phy_calibration_data_t,
     esp_phy_calibration_mode_t_PHY_RF_CAL_FULL,
@@ -20,11 +15,11 @@ use heapless::spsc::Queue;
 
 use crate::{
     frame::{
-        frame_get_version,
-        frame_is_ack_required,
         FRAME_SIZE,
         FRAME_VERSION_1,
         FRAME_VERSION_2,
+        frame_get_version,
+        frame_is_ack_required,
     },
     hal::*,
     pib::*,
@@ -37,7 +32,7 @@ static RX_QUEUE: Mutex<RefCell<Queue<RawReceived, { crate::CONFIG.rx_queue_size 
     Mutex::new(RefCell::new(Queue::new()));
 static STATE: Mutex<RefCell<Ieee802154State>> = Mutex::new(RefCell::new(Ieee802154State::Idle));
 
-extern "C" {
+unsafe extern "C" {
     fn bt_bb_v2_init_cmplx(print_version: u32); // from libbtbb.a
 
     fn bt_bb_set_zb_tx_on_delay(time: u16); // from libbtbb.a
@@ -76,10 +71,11 @@ pub struct RawReceived {
     pub channel: u8,
 }
 
-pub(crate) fn esp_ieee802154_enable(radio_clock_control: &mut RADIO_CLK) {
+pub(crate) fn esp_ieee802154_enable(radio_clock_control: RADIO_CLK<'_>) {
+    let mut radio_clock_control = RadioClockController::new(radio_clock_control);
     radio_clock_control.init_clocks();
-    radio_clock_control.enable(RadioPeripherals::Phy);
-    radio_clock_control.enable(RadioPeripherals::Ieee802154);
+    radio_clock_control.enable_phy(true);
+    radio_clock_control.enable_ieee802154(true);
 
     esp_phy_enable();
     esp_btbb_enable();
@@ -112,7 +108,7 @@ fn esp_btbb_enable() {
 fn ieee802154_mac_init() {
     #[cfg(feature = "esp32c6")]
     unsafe {
-        extern "C" {
+        unsafe extern "C" {
             static mut coex_pti_tab_ptr: u32;
             static coex_pti_tab: u8;
         }
@@ -384,7 +380,10 @@ fn ZB_MAC() {
     if events & Event::RxDone != 0 {
         trace!("rx done");
         unsafe {
-            trace!("Received raw {:x?}", &*addr_of!(RX_BUFFER));
+            trace!(
+                "Received raw {:?}",
+                crate::fmt::Bytes(&*core::ptr::addr_of!(RX_BUFFER))
+            );
             critical_section::with(|cs| {
                 let mut queue = RX_QUEUE.borrow_ref_mut(cs);
                 if !queue.is_full() {
@@ -398,7 +397,7 @@ fn ZB_MAC() {
                 }
 
                 let frm = if RX_BUFFER[0] >= FRAME_SIZE as u8 {
-                    warn!("RX_BUFFER[0] {:} is larger than frame size", RX_BUFFER[0]);
+                    warn!("RX_BUFFER[0] {} is larger than frame size", RX_BUFFER[0]);
                     &RX_BUFFER[1..][..FRAME_SIZE - 1]
                 } else {
                     &RX_BUFFER[1..][..RX_BUFFER[0] as usize]

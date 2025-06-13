@@ -41,8 +41,8 @@
 //! let config = InputConfig::default().with_pull(Pull::Up);
 //! let pin_a = Input::new(peripherals.GPIO4, config);
 //! let pin_b = Input::new(peripherals.GPIO5, config);
-//! let (input_a, _) = pin_a.split();
-//! let (input_b, _) = pin_b.split();
+//! let input_a = pin_a.peripheral_input();
+//! let input_b = pin_b.peripheral_input();
 //! ch0.set_ctrl_signal(input_a.clone());
 //! ch0.set_edge_signal(input_b.clone());
 //! ch0.set_ctrl_mode(channel::CtrlMode::Reverse, channel::CtrlMode::Keep);
@@ -98,7 +98,6 @@
 use self::unit::Unit;
 use crate::{
     interrupt::{self, InterruptHandler},
-    peripheral::{Peripheral, PeripheralRef},
     peripherals::{Interrupt, PCNT},
     system::GenericPeripheralGuard,
 };
@@ -108,7 +107,7 @@ pub mod unit;
 
 /// Pulse Counter (PCNT) peripheral driver.
 pub struct Pcnt<'d> {
-    _instance: PeripheralRef<'d, PCNT>,
+    _instance: PCNT<'d>,
 
     /// Unit 0
     pub unit0: Unit<'d, 0>,
@@ -136,9 +135,7 @@ pub struct Pcnt<'d> {
 
 impl<'d> Pcnt<'d> {
     /// Return a new PCNT
-    pub fn new(_instance: impl Peripheral<P = PCNT> + 'd) -> Self {
-        crate::into_ref!(_instance);
-
+    pub fn new(_instance: PCNT<'d>) -> Self {
         let guard = GenericPeripheralGuard::new();
         let pcnt = PCNT::regs();
 
@@ -188,7 +185,7 @@ impl<'d> Pcnt<'d> {
     /// handlers.
     #[instability::unstable]
     pub fn set_interrupt_handler(&mut self, handler: InterruptHandler) {
-        for core in crate::Cpu::other() {
+        for core in crate::system::Cpu::other() {
             crate::interrupt::disable(core, Interrupt::PCNT);
         }
         unsafe { interrupt::bind_interrupt(Interrupt::PCNT, handler.handler()) };

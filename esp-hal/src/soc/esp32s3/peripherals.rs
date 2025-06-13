@@ -10,6 +10,7 @@
 
 pub(crate) use esp32s3 as pac;
 // We need to export this for users to use
+#[doc(hidden)]
 pub use pac::Interrupt;
 
 // Note that certain are marked with `virtual` in the invocation of the
@@ -81,6 +82,12 @@ crate::peripherals! {
         WCL <= WCL,
         WIFI <= virtual,
         XTS_AES <= XTS_AES,
+
+        DMA_CH0 <= virtual,
+        DMA_CH1 <= virtual,
+        DMA_CH2 <= virtual,
+        DMA_CH3 <= virtual,
+        DMA_CH4 <= virtual,
     ],
     pins: [
         (0, [Input, Output, Analog, RtcIo])
@@ -128,12 +135,5 @@ crate::peripherals! {
         (46, [Input, Output])
         (47, [Input, Output])
         (48, [Input, Output])
-    ],
-    dma_channels: [
-        DMA_CH0: DmaChannel0,
-        DMA_CH1: DmaChannel1,
-        DMA_CH2: DmaChannel2,
-        DMA_CH3: DmaChannel3,
-        DMA_CH4: DmaChannel4,
     ]
 }

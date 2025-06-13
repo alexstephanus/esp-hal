@@ -24,14 +24,12 @@
 use core::{marker::PhantomData, ptr::copy_nonoverlapping};
 
 use crate::{
-    interrupt::InterruptHandler,
-    pac,
-    peripheral::{Peripheral, PeripheralRef},
-    peripherals::{Interrupt, RSA},
-    system::{GenericPeripheralGuard, Peripheral as PeripheralEnable},
     Async,
     Blocking,
-    Cpu,
+    interrupt::InterruptHandler,
+    pac,
+    peripherals::{Interrupt, RSA},
+    system::{Cpu, GenericPeripheralGuard, Peripheral as PeripheralEnable},
 };
 
 #[cfg_attr(esp32s2, path = "esp32sX.rs")]
@@ -46,7 +44,7 @@ pub use rsa_spec_impl::operand_sizes;
 
 /// RSA peripheral container
 pub struct Rsa<'d, Dm: crate::DriverMode> {
-    rsa: PeripheralRef<'d, RSA>,
+    rsa: RSA<'d>,
     phantom: PhantomData<Dm>,
     _guard: GenericPeripheralGuard<{ PeripheralEnable::Rsa as u8 }>,
 }
@@ -55,7 +53,7 @@ impl<'d> Rsa<'d, Blocking> {
     /// Create a new instance in [crate::Blocking] mode.
     ///
     /// Optionally an interrupt handler can be bound.
-    pub fn new(rsa: impl Peripheral<P = RSA> + 'd) -> Self {
+    pub fn new(rsa: RSA<'d>) -> Self {
         Self::new_internal(rsa)
     }
 
@@ -75,7 +73,7 @@ impl<'d> Rsa<'d, Blocking> {
     /// handlers.
     #[instability::unstable]
     pub fn set_interrupt_handler(&mut self, handler: InterruptHandler) {
-        for core in crate::Cpu::other() {
+        for core in crate::system::Cpu::other() {
             crate::interrupt::disable(core, Interrupt::RSA);
         }
         unsafe { crate::interrupt::bind_interrupt(Interrupt::RSA, handler.handler()) };
@@ -105,9 +103,7 @@ impl<'d> Rsa<'d, Async> {
 }
 
 impl<'d, Dm: crate::DriverMode> Rsa<'d, Dm> {
-    fn new_internal(rsa: impl Peripheral<P = RSA> + 'd) -> Self {
-        crate::into_ref!(rsa);
-
+    fn new_internal(rsa: RSA<'d>) -> Self {
         let guard = GenericPeripheralGuard::new();
 
         Self {
@@ -390,6 +386,7 @@ pub(crate) mod asynch {
     use procmacros::handler;
 
     use crate::{
+        Async,
         asynch::AtomicWaker,
         peripherals::RSA,
         rsa::{
@@ -400,7 +397,6 @@ pub(crate) mod asynch {
             RsaModularMultiplication,
             RsaMultiplication,
         },
-        Async,
     };
 
     static WAKER: AtomicWaker = AtomicWaker::new();

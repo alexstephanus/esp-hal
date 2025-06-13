@@ -41,7 +41,7 @@
 //!     .configure(timer::config::Config {
 //!         duty: timer::config::Duty::Duty5Bit,
 //!         clock_source: timer::LSClockSource::APBClk,
-//!         frequency: 24.kHz(),
+//!         frequency: Rate::from_khz(24),
 //!     })?;
 //!
 //! let mut channel0 = ledc.channel(channel::Number::Channel0, led);
@@ -74,7 +74,6 @@ use self::{
 use crate::{
     gpio::interconnect::PeripheralOutput,
     pac,
-    peripheral::{Peripheral, PeripheralRef},
     peripherals::LEDC,
     system::{Peripheral as PeripheralEnable, PeripheralClockControl},
 };
@@ -91,14 +90,16 @@ pub enum LSGlobalClkSource {
 
 /// LEDC (LED PWM Controller)
 pub struct Ledc<'d> {
-    _instance: PeripheralRef<'d, LEDC>,
+    _instance: LEDC<'d>,
     ledc: &'d pac::ledc::RegisterBlock,
 }
 
 #[cfg(esp32)]
+#[derive(Clone, Copy)]
 /// Used to specify HighSpeed Timer/Channel
 pub struct HighSpeed {}
 
+#[derive(Clone, Copy)]
 /// Used to specify LowSpeed Timer/Channel
 pub struct LowSpeed {}
 
@@ -119,9 +120,7 @@ impl Speed for LowSpeed {
 
 impl<'d> Ledc<'d> {
     /// Return a new LEDC
-    pub fn new(_instance: impl Peripheral<P = LEDC> + 'd) -> Self {
-        crate::into_ref!(_instance);
-
+    pub fn new(_instance: LEDC<'d>) -> Self {
         if PeripheralClockControl::enable(PeripheralEnable::Ledc) {
             PeripheralClockControl::reset(PeripheralEnable::Ledc);
         }
@@ -178,7 +177,7 @@ impl<'d> Ledc<'d> {
     pub fn channel<S: TimerSpeed>(
         &self,
         number: channel::Number,
-        output_pin: impl Peripheral<P = impl PeripheralOutput> + 'd,
+        output_pin: impl PeripheralOutput<'d>,
     ) -> Channel<'d, S> {
         Channel::new(number, output_pin)
     }
